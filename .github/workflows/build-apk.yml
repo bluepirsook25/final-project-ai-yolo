@@ -43,9 +43,21 @@ jobs:
           python -m pip install --upgrade pip wheel setuptools
           pip install --upgrade Cython==0.29.36 buildozer
 
-      - name: Create buildozer.spec
+      - name: Clone & patch python-for-android (enable WebView camera)
         run: |
-          cat > mobile-app/buildozer.spec << 'SPEC'
+          # IMPORTANT: clone OUTSIDE the app source dir (mobile-app). With
+          # source.dir=. + source.include_exts=py, anything under mobile-app gets
+          # bundled into the app; the thousands of .py files in the p4a repo then
+          # break the final compileall step ("syntax error in one of your files").
+          git clone -b master --single-branch --depth 1 \
+            https://github.com/kivy/python-for-android.git "$RUNNER_TEMP/p4a-src"
+          python mobile-app/patch_p4a_webview.py "$RUNNER_TEMP/p4a-src"
+          echo "P4A_SRC=$RUNNER_TEMP/p4a-src" >> "$GITHUB_ENV"
+
+      - name: Create buildozer.spec
+        working-directory: mobile-app
+        run: |
+          cat > buildozer.spec << SPEC
           [app]
           title = LuxeSmile Dental
           package.name = luxesmiledental
@@ -53,21 +65,24 @@ jobs:
           version = 1.0
           source.dir = .
           source.include_exts = py
+          source.exclude_dirs = p4a-src, .buildozer, bin, tests, __pycache__
+          source.exclude_patterns = patch_p4a_webview.py
           requirements = python3
           android.minapi = 26
           android.api = 33
           android.archs = arm64-v8a
           android.accept_sdk_license = True
-          android.permissions = INTERNET
+          android.permissions = INTERNET,CAMERA
           orientation = portrait
           fullscreen = 0
           p4a.bootstrap = webview
           p4a.port = 8766
+          p4a.source_dir = ${P4A_SRC}
           [buildozer]
           log_level = 2
           warn_on_root = 1
           SPEC
-          echo "----- spec written -----"; cat mobile-app/buildozer.spec
+          echo "----- spec written -----"; cat buildozer.spec
 
       - name: Build the APK
         working-directory: mobile-app
@@ -78,22 +93,23 @@ jobs:
           buildozer android debug
 
       - name: Locate the built APK
+        working-directory: mobile-app
         run: |
           APK=$(find . -name "*.apk" | head -n1)
           echo "Found APK: $APK"
           cp "$APK" LuxeSmile.apk
 
       - name: Upload APK artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: luxesmile-apk
-          path: LuxeSmile.apk
+          path: mobile-app/LuxeSmile.apk
           if-no-files-found: error
 
       - name: Publish to GitHub Release
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: latest
           name: LuxeSmile (latest build)
           target_commitish: ${{ github.sha }}
-          files: LuxeSmile.apk
+          files: mobile-app/LuxeSmile.apk
