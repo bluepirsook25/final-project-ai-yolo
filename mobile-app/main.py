@@ -163,6 +163,7 @@ main{padding:16px;max-width:480px;margin:0 auto}
     <div class="ch" id="ch">Tap Start to open camera</div>
   </div>
   <button class="btn btn-t" id="cb" onclick="togCam()">Start Camera</button>
+  <button class="btn btn-o" id="fb" style="display:none" onclick="flipCam()">🔄 Flip Camera</button>
   <button class="btn btn-o" id="sb" style="display:none" onclick="snap()">🔍 Analyse with YOLO</button>
   <div class="rc" id="rc">
     <div class="rt">🦷 Detection Results</div>
@@ -262,20 +263,28 @@ function lAppts(){
     :'<div style="text-align:center;color:var(--muted);padding:24px;font-size:.85rem">No appointments yet</div>';
 }
 function dA(id){sA(gA().filter(a=>a.id!==id));lAppts();uSt();}
-let vs=null,cOn=false,sc=0;
+let vs=null,cOn=false,sc=0,curFacing='environment';
 async function togCam(){if(cOn)stpC();else await stC();}
 async function stC(){
   try{
-    vs=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'},audio:false});
+    if(vs)vs.getTracks().forEach(t=>t.stop());
+    vs=await navigator.mediaDevices.getUserMedia({video:{facingMode:curFacing},audio:false});
     const v=document.getElementById('vid');
     v.srcObject=vs;v.style.display='block';
+    v.style.transform=curFacing==='user'?'scaleX(-1)':'none';
     document.getElementById('ci').style.display='none';
     document.getElementById('ch').style.display='none';
     document.getElementById('scanl').classList.add('on');
     document.getElementById('cb').textContent='Stop Camera';
     document.getElementById('sb').style.display='block';
+    document.getElementById('fb').style.display='block';
     cOn=true;
   }catch(e){toast('Camera: '+e.message,'e')}
+}
+async function flipCam(){
+  curFacing=curFacing==='environment'?'user':'environment';
+  if(cOn)await stC();   // restart stream on the other camera
+  toast(curFacing==='user'?'Front camera':'Back camera');
 }
 function stpC(){
   if(vs)vs.getTracks().forEach(t=>t.stop());
@@ -286,6 +295,7 @@ function stpC(){
   document.getElementById('scanl').classList.remove('on');
   document.getElementById('cb').textContent='Start Camera';
   document.getElementById('sb').style.display='none';
+  document.getElementById('fb').style.display='none';
 }
 async function snap(){
   const v=document.getElementById('vid'),c=document.getElementById('cnv');
@@ -372,7 +382,14 @@ def _open_browser():
             pass  # Chrome must be opened manually
 
 def _write_spec():
-    """Auto-creates buildozer.spec — only needed for APK builds, not Pydroid 3."""
+    """Auto-creates buildozer.spec — only needed for APK builds, not Pydroid 3.
+
+    NOTE: the live camera also needs the WebView to grant getUserMedia. CI does
+    this by patching the p4a webview bootstrap (see patch_p4a_webview.py +
+    .github/workflows/build-apk.yml). For a manual local build, run that same
+    patch against your python-for-android checkout and point p4a.source_dir at
+    it, otherwise the camera preview stays black.
+    """
     spec = """\
 [app]
 title           = LuxeSmile Dental
@@ -381,14 +398,16 @@ package.domain  = org.dental
 version         = 1.0
 source.dir      = .
 source.include_exts = py
-requirements    = python3,kivy,android
+requirements    = python3
 android.minapi  = 26
 android.api     = 33
-android.ndk     = 25b
-android.archs   = arm64-v8a, armeabi-v7a
-android.permissions = INTERNET,CAMERA,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE
+android.archs   = arm64-v8a
+android.accept_sdk_license = True
+android.permissions = INTERNET, CAMERA
 orientation     = portrait
 fullscreen      = 0
+p4a.bootstrap   = webview
+p4a.port        = 8766
 
 [buildozer]
 log_level = 2
@@ -427,3 +446,204 @@ if __name__ == '__main__':
     except KeyboardInterrupt:
         print('\nStopped.')
         server.shutdown()
+ #!/usr/bin/env python3
+"""
+Patch the python-for-android *webview* bootstrap so the embedded WebView can
+use the device camera (navigator.mediaDevices.getUserMedia).
+
+Two things are injected into PythonActivity.java, right after the WebView is
+created:
+
+  1. A runtime request for android.permission.CAMERA (API 23+). The WebView can
+     only hand a web page a permission that the host app itself holds, so the
+     app must obtain CAMERA at runtime first.
+  2. A WebChromeClient whose onPermissionRequest() grants the request. The stock
+     webview bootstrap installs only a WebViewClient, so every getUserMedia call
+     is otherwise denied silently.
+
+Everything is fully-qualified Java using only the standard Android SDK, so no
+extra imports, recipes or Python packages are required (requirements stays
+"python3").
+
+Usage:
+    python patch_p4a_webview.py <path-to-python-for-android-checkout>
+"""
+import os
+import sys
+
+INJECT = """
+            // --- LuxeSmile: runtime camera permission + WebView getUserMedia grant ---
+            if (android.os.Build.VERSION.SDK_INT >= 23 &&
+                    PythonActivity.mActivity.checkSelfPermission(android.Manifest.permission.CAMERA)
+                        != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                PythonActivity.mActivity.requestPermissions(
+                        new String[]{android.Manifest.permission.CAMERA}, 1001);
+            }
+            mWebView.getSettings().setMediaPlaybackRequiresUserGesture(false);
+            mWebView.setWebChromeClient(new android.webkit.WebChromeClient() {
+                @Override
+                public void onPermissionRequest(final android.webkit.PermissionRequest request) {
+                    PythonActivity.mActivity.runOnUiThread(new Runnable() {
+                        public void run() { request.grant(request.getResources()); }
+                    });
+                }
+            });
+            // --- end LuxeSmile patch ---
+"""
+
+ANCHOR = "mWebView.getSettings().setDomStorageEnabled(true);"
+MARKER = "LuxeSmile: runtime camera permission"
+
+
+def main() -> int:
+    if len(sys.argv) != 2:
+        print("usage: python patch_p4a_webview.py <p4a-dir>", file=sys.stderr)
+        return 2
+
+    p4a_dir = os.path.abspath(sys.argv[1])
+    target = os.path.join(
+        p4a_dir,
+        "pythonforandroid", "bootstraps", "webview", "build",
+        "src", "main", "java", "org", "kivy", "android", "PythonActivity.java",
+    )
+
+    if not os.path.isfile(target):
+        print(f"ERROR: bootstrap file not found: {target}", file=sys.stderr)
+        return 1
+
+    with open(target, "r", encoding="utf-8") as f:
+        src = f.read()
+
+    if MARKER in src:
+        print("Already patched — nothing to do.")
+        return 0
+
+    if ANCHOR not in src:
+        print(f"ERROR: anchor not found in {target}", file=sys.stderr)
+        print("       p4a layout may have changed; update ANCHOR.", file=sys.stderr)
+        return 1
+
+    src = src.replace(ANCHOR, ANCHOR + INJECT, 1)
+    with open(target, "w", encoding="utf-8") as f:
+        f.write(src)
+
+    print(f"Patched camera permission + WebChromeClient into {target}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+name: Build APK
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-apk:
+    name: Build LuxeSmile APK
+    runs-on: ubuntu-22.04
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            git zip unzip openjdk-17-jdk python3-pip autoconf libtool pkg-config \
+            zlib1g-dev libncurses5-dev libncursesw5-dev cmake libffi-dev \
+            libssl-dev build-essential ccache libltdl-dev
+          sudo apt-get install -y libtinfo5 || echo "libtinfo5 unavailable, continuing"
+
+      - name: Install Buildozer
+        run: |
+          python -m pip install --upgrade pip wheel setuptools
+          pip install --upgrade Cython==0.29.36 buildozer
+
+      - name: Clone & patch python-for-android (enable WebView camera)
+        working-directory: mobile-app
+        run: |
+          # Pre-clone the SAME p4a buildozer uses (kivy / master) so we can patch
+          # the webview bootstrap to request CAMERA and grant getUserMedia.
+          # buildozer uses this dir as-is when p4a.source_dir is set: no re-clone,
+          # no overwrite of the patch.
+          git clone -b master --single-branch --depth 1 \
+            https://github.com/kivy/python-for-android.git p4a-src
+          python patch_p4a_webview.py p4a-src
+          echo "P4A_SRC=$(pwd)/p4a-src" >> "$GITHUB_ENV"
+
+      - name: Create buildozer.spec
+        working-directory: mobile-app
+        run: |
+          cat > buildozer.spec << SPEC
+          [app]
+          title = LuxeSmile Dental
+          package.name = luxesmiledental
+          package.domain = org.dental
+          version = 1.0
+          source.dir = .
+          source.include_exts = py
+          requirements = python3
+          android.minapi = 26
+          android.api = 33
+          android.archs = arm64-v8a
+          android.accept_sdk_license = True
+          android.permissions = INTERNET, CAMERA
+          orientation = portrait
+          fullscreen = 0
+          p4a.bootstrap = webview
+          p4a.port = 8766
+          p4a.source_dir = ${P4A_SRC}
+          [buildozer]
+          log_level = 2
+          warn_on_root = 1
+          SPEC
+          echo "----- spec written -----"; cat buildozer.spec
+
+      - name: Build the APK
+        working-directory: mobile-app
+        run: |
+          export JAVA_HOME="${JAVA_HOME_17_X64:-/usr/lib/jvm/temurin-17-jdk-amd64}"
+          export PATH="$JAVA_HOME/bin:$PATH"
+          echo "Using Java:"; java -version
+          buildozer android debug
+
+      - name: Locate the built APK
+        working-directory: mobile-app
+        run: |
+          APK=$(find . -name "*.apk" | head -n1)
+          echo "Found APK: $APK"
+          cp "$APK" LuxeSmile.apk
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: luxesmile-apk
+          path: mobile-app/LuxeSmile.apk
+          if-no-files-found: error
+
+      - name: Publish to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: LuxeSmile (latest build)
+          target_commitish: ${{ github.sha }}
+          files: mobile-app/LuxeSmile.apk
