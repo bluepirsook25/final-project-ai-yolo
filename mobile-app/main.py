@@ -123,7 +123,7 @@ main{padding:16px;max-width:480px;margin:0 auto}
   <div class="sec-title">Book Appointment</div>
   <div class="fc"><h3>New Appointment</h3>
     <div class="fg"><label class="fl">Doctor</label>
-      <select class="fs" id="ad">
+      <select class="fs" id="ad" onchange="refreshSlots()">
         <option value="1">Dr. Sarah Mitchell — General</option>
         <option value="2">Dr. James Okonkwo — Orthodontics</option>
         <option value="3">Dr. Elena Vasquez — Cosmetic</option>
@@ -131,7 +131,7 @@ main{padding:16px;max-width:480px;margin:0 auto}
         <option value="5">Dr. Priya Sharma — Paediatric</option>
       </select></div>
     <div class="fg"><label class="fl">Your Name</label><input class="fi" id="an" placeholder="Full name"/></div>
-    <div class="fg"><label class="fl">Date</label><input class="fi" id="adate" type="date"/></div>
+    <div class="fg"><label class="fl">Date</label><input class="fi" id="adate" type="date" onchange="refreshSlots()"/></div>
     <div class="fg"><label class="fl">Time</label>
       <select class="fs" id="at">
         <option>09:00</option><option>09:30</option><option>10:00</option><option>10:30</option>
@@ -204,7 +204,7 @@ function go(id){
   document.getElementById('s-'+id).classList.add('active');
   document.querySelectorAll('.tab')[TABS.indexOf(id)].classList.add('active');
   if(id==='doctors')rDocs();
-  if(id==='appointments'){lAppts();document.getElementById('adate').valueAsDate=new Date();}
+  if(id==='appointments'){lAppts();const dd=document.getElementById('adate');dd.min=todayStr();if(!dd.value||dd.value<todayStr())dd.value=todayStr();refreshSlots();}
 }
 function rDocs(){
   document.getElementById('dlist').innerHTML=DOCS.map(d=>`
@@ -218,17 +218,42 @@ function pickDoc(id,n){go('appointments');document.getElementById('ad').value=id
 function gA(){try{return JSON.parse(localStorage.getItem('ls_v2')||'[]')}catch{return[]}}
 function sA(a){localStorage.setItem('ls_v2',JSON.stringify(a))}
 function uSt(){document.getElementById('sa').textContent=gA().length}
+const SLOTS=['09:00','09:30','10:00','10:30','11:00','14:00','14:30','15:00'];
+function pad(n){return String(n).padStart(2,'0')}
+function todayStr(){const x=new Date();return x.getFullYear()+'-'+pad(x.getMonth()+1)+'-'+pad(x.getDate())}
+function nowMin(){const x=new Date();return x.getHours()*60+x.getMinutes()}
+function slotMin(t){const p=t.split(':');return (+p[0])*60+(+p[1])}
+function refreshSlots(){
+  const sel=document.getElementById('at');if(!sel)return;
+  const docId=document.getElementById('ad').value;
+  const date=document.getElementById('adate').value;
+  const isToday=date===todayStr();
+  const taken=gA().filter(a=>String(a.docId)===String(docId)&&a.d===date).map(a=>a.t);
+  sel.innerHTML=SLOTS.map(t=>{
+    let off=false,lab=t;
+    if(taken.includes(t)){off=true;lab=t+' — booked';}
+    else if(isToday&&slotMin(t)<=nowMin()){off=true;lab=t+' — passed';}
+    return '<option value="'+t+'"'+(off?' disabled':'')+'>'+lab+'</option>';
+  }).join('');
+  const free=SLOTS.find(t=>!taken.includes(t)&&!(isToday&&slotMin(t)<=nowMin()));
+  if(free)sel.value=free;
+}
 function book(){
   const n=document.getElementById('an').value.trim();
   const d=document.getElementById('adate').value;
   const t=document.getElementById('at').value;
   const v=document.getElementById('av').value;
-  const doc=DOCS[document.getElementById('ad').selectedIndex];
+  const docEl=document.getElementById('ad');
+  const doc=DOCS[docEl.selectedIndex];const docId=docEl.value;
   if(!n){toast('Enter name','e');return}
   if(!d){toast('Pick date','e');return}
+  if(d<todayStr()){toast('That date is in the past','e');return}
+  if(!t){toast('No free time on that day','e');return}
   const a=gA();
-  a.unshift({id:Date.now(),n,d,t,v,doc:doc.n});
-  sA(a);uSt();lAppts();toast('Booked ✓');
+  if(a.some(x=>String(x.docId)===String(docId)&&x.d===d&&x.t===t)){toast(doc.n.split(' ').slice(0,2).join(' ')+' is already booked at '+t,'e');refreshSlots();return}
+  if(d===todayStr()&&slotMin(t)<=nowMin()){toast('That time has already passed','e');refreshSlots();return}
+  a.unshift({id:Date.now(),n,d,t,v,doc:doc.n,docId:docId});
+  sA(a);uSt();lAppts();refreshSlots();toast('Booked ✓');
 }
 function lAppts(){
   const a=gA();
