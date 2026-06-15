@@ -417,6 +417,9 @@ if __name__ == '__main__':
     print(f'✓ Server running!\n\n👉 Open Chrome manually → http://127.0.0.1:{PORT}\n   (trying to open automatically...)\n')
     threading.Thread(target=_open_browser, daemon=True).start()
 
+    # also write buildozer.spec in case user wants to build APK later
+    _write_spec()
+
     # keep running
     try:
         while True:
