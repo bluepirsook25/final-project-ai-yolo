@@ -1,4 +1,3 @@
-
 name: Build APK
 
 on:
@@ -13,7 +12,7 @@ jobs:
   build-apk:
     name: Build LuxeSmile APK
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
 
     steps:
       - name: Checkout repository
@@ -23,38 +22,40 @@ jobs:
         run: |
           cat > mobile-app/buildozer.spec << 'SPEC'
           [app]
-          title           = LuxeSmile Dental
-          package.name    = luxesmiledental
-          package.domain  = org.dental
-          version         = 1.0
-          source.dir      = .
+          title = LuxeSmile Dental
+          package.name = luxesmiledental
+          package.domain = org.dental
+          version = 1.0
+          source.dir = .
           source.include_exts = py
-          requirements    = python3
-          android.minapi  = 26
-          android.api     = 33
-          android.ndk     = 25b
-          android.archs   = arm64-v8a
+          requirements = python3
+          android.minapi = 26
+          android.api = 33
+          android.archs = arm64-v8a
           android.permissions = INTERNET
-          orientation     = portrait
-          fullscreen      = 0
-          p4a.bootstrap   = webview
-          p4a.port        = 8766
+          orientation = portrait
+          fullscreen = 0
+          p4a.bootstrap = webview
+          p4a.port = 8766
           [buildozer]
           log_level = 2
           warn_on_root = 1
           SPEC
-          echo "Wrote mobile-app/buildozer.spec"
+          echo "----- buildozer.spec written: -----"
+          cat mobile-app/buildozer.spec
 
-      - name: Build APK with Buildozer
-        uses: ArtemSBulgakov/buildozer-action@v1
-        id: buildozer
+      - name: Build APK
+        uses: digreatbrian/buildozer-action@v2
         with:
-          command: buildozer android debug
-          workdir: mobile-app
-          buildozer_version: stable
+          python-version: "3.11"
+          buildozer-cmd: buildozer -v android debug
+          work-dir: mobile-app
 
-      - name: Rename APK
-        run: cp "${{ steps.buildozer.outputs.filename }}" LuxeSmile.apk
+      - name: Locate the built APK
+        run: |
+          APK=$(find . -name "*.apk" | head -n1)
+          echo "Found APK: $APK"
+          cp "$APK" LuxeSmile.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v7
