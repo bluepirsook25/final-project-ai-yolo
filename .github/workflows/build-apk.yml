@@ -1,1 +1,72 @@
 
+name: Build APK
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-apk:
+    name: Build LuxeSmile APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Create buildozer.spec
+        run: |
+          cat > mobile-app/buildozer.spec << 'SPEC'
+          [app]
+          title           = LuxeSmile Dental
+          package.name    = luxesmiledental
+          package.domain  = org.dental
+          version         = 1.0
+          source.dir      = .
+          source.include_exts = py
+          requirements    = python3
+          android.minapi  = 26
+          android.api     = 33
+          android.ndk     = 25b
+          android.archs   = arm64-v8a
+          android.permissions = INTERNET
+          orientation     = portrait
+          fullscreen      = 0
+          p4a.bootstrap   = webview
+          p4a.port        = 8766
+          [buildozer]
+          log_level = 2
+          warn_on_root = 1
+          SPEC
+          echo "Wrote mobile-app/buildozer.spec"
+
+      - name: Build APK with Buildozer
+        uses: ArtemSBulgakov/buildozer-action@v1
+        id: buildozer
+        with:
+          command: buildozer android debug
+          workdir: mobile-app
+          buildozer_version: stable
+
+      - name: Rename APK
+        run: cp "${{ steps.buildozer.outputs.filename }}" LuxeSmile.apk
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: luxesmile-apk
+          path: LuxeSmile.apk
+          if-no-files-found: error
+
+      - name: Publish to GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: latest
+          name: LuxeSmile (latest build)
+          target_commitish: ${{ github.sha }}
+          files: LuxeSmile.apk
