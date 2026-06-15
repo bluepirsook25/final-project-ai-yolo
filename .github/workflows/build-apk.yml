@@ -23,6 +23,12 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -65,7 +71,11 @@ jobs:
 
       - name: Build the APK
         working-directory: mobile-app
-        run: buildozer android debug
+        run: |
+          export JAVA_HOME="${JAVA_HOME_17_X64:-/usr/lib/jvm/temurin-17-jdk-amd64}"
+          export PATH="$JAVA_HOME/bin:$PATH"
+          echo "Using Java:"; java -version
+          buildozer android debug
 
       - name: Locate the built APK
         run: |
