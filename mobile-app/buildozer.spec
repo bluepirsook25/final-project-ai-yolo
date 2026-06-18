@@ -5,7 +5,7 @@ package.domain = org.dental
 version = 1.0
 source.dir = .
 source.include_exts = py,png,jpg,jpeg,json
-requirements = python3,kivy,android,pillow
+requirements = python3
 orientation = portrait
 fullscreen = 0
 
