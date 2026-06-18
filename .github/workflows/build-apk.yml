@@ -1,5 +1,8 @@
 name: Build APK
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 on:
   push:
     branches: [ "main" ]
@@ -26,90 +29,76 @@ jobs:
       - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
-          distribution: 'temurin'
-          java-version: '17'
+          distribution: "temurin"
+          java-version: "17"
 
       - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
-            git zip unzip openjdk-17-jdk python3-pip autoconf libtool pkg-config \
-            zlib1g-dev libncurses5-dev libncursesw5-dev cmake libffi-dev \
-            libssl-dev build-essential ccache libltdl-dev
+            autoconf automake build-essential ccache cmake git libffi-dev \
+            libltdl-dev libncurses5-dev libncursesw5-dev libssl-dev libtool \
+            openjdk-17-jdk pkg-config python3-pip unzip zip zlib1g-dev
           sudo apt-get install -y libtinfo5 || echo "libtinfo5 unavailable, continuing"
 
       - name: Install Buildozer
         run: |
           python -m pip install --upgrade pip wheel setuptools
-          pip install --upgrade Cython==0.29.36 buildozer
-
-      - name: Clone & patch python-for-android (enable WebView camera)
-        run: |
-          # IMPORTANT: clone OUTSIDE the app source dir (mobile-app). With
-          # source.dir=. + source.include_exts=py, anything under mobile-app gets
-          # bundled into the app; the thousands of .py files in the p4a repo then
-          # break the final compileall step ("syntax error in one of your files").
-          git clone -b master --single-branch --depth 1 \
-            https://github.com/kivy/python-for-android.git "$RUNNER_TEMP/p4a-src"
-          python mobile-app/patch_p4a_webview.py "$RUNNER_TEMP/p4a-src"
-          echo "P4A_SRC=$RUNNER_TEMP/p4a-src" >> "$GITHUB_ENV"
+          python -m pip install Cython==0.29.36 buildozer virtualenv
 
       - name: Create buildozer.spec
-        working-directory: mobile-app
         run: |
-          cat > buildozer.spec << SPEC
+          cat > mobile-app/buildozer.spec << 'SPEC'
           [app]
           title = LuxeSmile Dental
           package.name = luxesmiledental
           package.domain = org.dental
           version = 1.0
           source.dir = .
-          source.include_exts = py
-          source.exclude_dirs = p4a-src, .buildozer, bin, tests, __pycache__
-          source.exclude_patterns = patch_p4a_webview.py
-          requirements = python3
+          source.include_exts = py,png,jpg,jpeg,json
+          requirements = python3,kivy,android,pillow
           android.minapi = 26
-          android.api = 33
+          android.api = 36
+          android.ndk = 25b
           android.archs = arm64-v8a
           android.accept_sdk_license = True
-          android.permissions = INTERNET,CAMERA
+          android.permissions = INTERNET,CAMERA,WRITE_EXTERNAL_STORAGE,READ_EXTERNAL_STORAGE
           orientation = portrait
           fullscreen = 0
           p4a.bootstrap = webview
           p4a.port = 8766
-          p4a.source_dir = ${P4A_SRC}
+
           [buildozer]
           log_level = 2
           warn_on_root = 1
           SPEC
-          echo "----- spec written -----"; cat buildozer.spec
+          cat mobile-app/buildozer.spec
 
       - name: Build the APK
         working-directory: mobile-app
         run: |
           export JAVA_HOME="${JAVA_HOME_17_X64:-/usr/lib/jvm/temurin-17-jdk-amd64}"
           export PATH="$JAVA_HOME/bin:$PATH"
-          echo "Using Java:"; java -version
+          java -version
           buildozer android debug
 
       - name: Locate the built APK
-        working-directory: mobile-app
         run: |
-          APK=$(find . -name "*.apk" | head -n1)
-          echo "Found APK: $APK"
+          APK=$(find mobile-app/bin -name "*.apk" | head -n1)
+          test -n "$APK"
           cp "$APK" LuxeSmile.apk
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: luxesmile-apk
-          path: mobile-app/LuxeSmile.apk
+          path: LuxeSmile.apk
           if-no-files-found: error
 
       - name: Publish to GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: latest
-          name: LuxeSmile (latest build)
+          name: LuxeSmile latest build
           target_commitish: ${{ github.sha }}
-          files: mobile-app/LuxeSmile.apk
+          files: LuxeSmile.apk
